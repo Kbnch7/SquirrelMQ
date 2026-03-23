@@ -15,6 +15,42 @@ Persistence Layer (PostgreSQL): Отвечает за транзакционну
 
 Delivery Service: Следит за отправкой сообщений активным подписчикам и ожидает подтверждения (ACK).
 
+## Схема архитектуры
+```mermaid
+graph TB
+subgraph Network_IO [1. Сетевой Слой]
+    TCPServer[TCP/gRPC Сервер]
+    Auth[Аутентификация]
+end
+
+subgraph Core_Engine [2. Ядро Брокера]
+    direction TB
+    ReqParser["Десериализатор (Proto)"]
+    Router{Роутер}
+end
+
+subgraph State_Management [3. Состояние и Хранение]
+    direction LR
+    subgraph Memory_Layer [RAM]
+        InMemQueues[[Очереди в памяти]]
+        ConnDB[[Таблица подключений]]
+    end
+
+    subgraph Persistent_Layer [Disk]
+        WAL[(Postgres)]
+    end
+end
+
+TCPServer --> Auth
+Auth --> ReqParser
+ReqParser --> Router
+Router --> InMemQueues
+InMemQueues --> WAL
+InMemQueues --> ConnDB
+ConnDB --> TCPServer
+```
+
+
 ## Формат сообщения
 ``` proto
 syntax = "proto3";
