@@ -65,23 +65,37 @@ message Message {
 ```
 
 ## Структура БД
-```
-messages: 
-    id (PK),
-    exchange_id,
-    body,
-    status (pending/sent/acked),
-    idempotency_key (Unique)
+```mermaid
+erDiagram
+    MESSAGES {
+        string id PK
+        string exchange_id FK
+        blob payload
+        string routing_key
+        string status
+        string idempotency_key
+        string metadata
+        int64 timestamp
+    }
+    QUEUES {
+        string id PK
+        string name
+        boolean is_durable
+    }
+    EXCHANGES {
+        string id PK
+        string name
+        string type
+    }
+    BINDINGS {
+        string exchange_id FK
+        string queue_id FK
+        string routing_key
+    }
 
-queues: 
-    id,
-    name,
-    is_durable
-
-bindings: 
-    exchange_id (FK),
-    queue_id (FK),
-    routing_key
+    EXCHANGES ||--o{ BINDINGS : "routes_to"
+    QUEUES ||--o{ BINDINGS : "bound_via"
+    EXCHANGES ||--o{ MESSAGES : "manages"
 ```
 
 ## Технический стек
