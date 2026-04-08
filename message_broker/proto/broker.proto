@@ -1,0 +1,65 @@
+syntax = "proto3";
+
+package broker;
+
+import "google/protobuf/timestamp.proto";
+
+service MessageBroker {
+  rpc DeclareExchange (ExchangeRequest) returns (ActionResponse);
+  
+  rpc DeclareQueue (QueueRequest) returns (ActionResponse);
+  
+  rpc BindQueue (BindRequest) returns (ActionResponse);
+
+  rpc Publish (PublishRequest) returns (PublishResponse);
+
+  rpc Consume (ConsumeRequest) returns (stream Message);
+}
+
+enum ExchangeType {
+  DIRECT = 0;
+  FANOUT = 1;
+  TOPIC = 2;
+}
+
+message ExchangeRequest {
+  string name = 1;
+  ExchangeType type = 2;
+}
+
+message QueueRequest {
+  string name = 1;
+}
+
+message BindRequest {
+  string queue_name = 1;
+  string exchange_name = 2;
+  string binding_key = 3;
+}
+
+message PublishRequest {
+  string exchange_name = 1;
+  string routing_key = 2;
+  string payload = 3;
+}
+
+message Message {
+  string id = 1;
+  string routing_key = 2;
+  string payload = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}
+
+message ConsumeRequest {
+  string queue_name = 1;
+}
+
+message PublishResponse {
+  bool stored = 1;
+  string message_id = 2;
+}
+
+message ActionResponse {
+  bool success = 1;
+  string error_message = 2;
+}
