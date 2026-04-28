@@ -14,12 +14,19 @@ service MessageBroker {
   rpc Publish (PublishRequest) returns (PublishResponse);
 
   rpc Consume (ConsumeRequest) returns (stream Message);
+
+  rpc AckMessage (AckRequest) returns (ActionResponse);
 }
 
 enum ExchangeType {
   DIRECT = 0;
   FANOUT = 1;
   TOPIC = 2;
+}
+
+message AckRequest {
+  string message_id = 1;
+  string queue_name = 2;
 }
 
 message ExchangeRequest {

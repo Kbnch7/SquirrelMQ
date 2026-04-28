@@ -1,6 +1,7 @@
 from src.infrastructure.memory.storage import storage
 from src.domain.router import Router
 from src.domain.models import Message, ExchangeType
+from src.infrastructure.persistence.storage import pg_storage
 
 class BrokerService:
     def __init__(self):
@@ -9,20 +10,23 @@ class BrokerService:
 
     async def publish_message(self, exchange_name: str, routing_key: str, payload: bytes):
         message = Message(payload=payload, routing_key=routing_key)
-        await self.storage.save_message(message)
+        
+        await pg_storage.save_message(message)
 
         exchange = self.storage.get_exchange(exchange_name)
-        if not exchange:
-            print(f"exchange {exchange_name} не найден")
-            return False
+        if not exchange: return False
 
         target_queue_names = self.router.get_destination_queues(exchange, message)
         for q_name in target_queue_names:
             queue = self.storage.get_queue(q_name)
             if queue:
+                await pg_storage.enqueue_message(q_name, message.id)
                 await queue.put(message)
-                print(f"сообщение доставлено в очередь: {q_name}")
         
+        return True
+    
+    async def ack_message(self, queue_name: str, message_id: str):
+        await pg_storage.ack_message(queue_name, message_id)
         return True
 
     def declare_exchange(self, name: str, etype_value: int):
@@ -39,6 +43,11 @@ class BrokerService:
         queue = self.storage.get_queue(queue_name)
         if not queue:
             raise ValueError("queue not found")
+
+        pending_messages = await pg_storage.get_pending_messages(queue_name)
+        for msg in pending_messages:
+            await queue.put(msg)
+            print(f"восстановлено неподтвержденное сообщение: {msg.id}")
 
         while True:
             message = await queue.get()

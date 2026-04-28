@@ -50,3 +50,19 @@ class MessageBrokerHandler(broker_pb2_grpc.MessageBrokerServicer):
                 )
         except Exception as e:
             print(f"ошибка консьюмера: {e}")
+
+    async def AckMessage(self, request, context):
+        try:
+            success = await self.service.ack_message(
+                queue_name=request.queue_name, 
+                message_id=request.message_id
+            )
+            return broker_pb2.ActionResponse(
+                success=success, 
+                error_message="" if success else "ack failed"
+            )
+        except Exception as e:
+            return broker_pb2.ActionResponse(
+                success=False, 
+                error_message=str(e)
+            )

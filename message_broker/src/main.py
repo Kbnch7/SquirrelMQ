@@ -2,6 +2,7 @@ import asyncio
 import grpc
 from src.interfaces.grpc import broker_pb2_grpc
 from src.interfaces.grpc.handler import MessageBrokerHandler
+from src.infrastructure.persistence.storage import pg_storage
 
 async def serve():
     server = grpc.aio.server()
@@ -14,7 +15,8 @@ async def serve():
     server.add_insecure_port(listen_addr)
     
     print(f"SquirrelMQ запущен на {listen_addr}")
-    
+
+    await pg_storage.connect()
     await server.start()
     await server.wait_for_termination()
 

@@ -59,6 +59,11 @@ class MessageBrokerStub(object):
                 request_serializer=broker__pb2.ConsumeRequest.SerializeToString,
                 response_deserializer=broker__pb2.Message.FromString,
                 _registered_method=True)
+        self.AckMessage = channel.unary_unary(
+                '/broker.MessageBroker/AckMessage',
+                request_serializer=broker__pb2.AckRequest.SerializeToString,
+                response_deserializer=broker__pb2.ActionResponse.FromString,
+                _registered_method=True)
 
 
 class MessageBrokerServicer(object):
@@ -94,6 +99,12 @@ class MessageBrokerServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def AckMessage(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_MessageBrokerServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -121,6 +132,11 @@ def add_MessageBrokerServicer_to_server(servicer, server):
                     servicer.Consume,
                     request_deserializer=broker__pb2.ConsumeRequest.FromString,
                     response_serializer=broker__pb2.Message.SerializeToString,
+            ),
+            'AckMessage': grpc.unary_unary_rpc_method_handler(
+                    servicer.AckMessage,
+                    request_deserializer=broker__pb2.AckRequest.FromString,
+                    response_serializer=broker__pb2.ActionResponse.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -258,6 +274,33 @@ class MessageBroker(object):
             '/broker.MessageBroker/Consume',
             broker__pb2.ConsumeRequest.SerializeToString,
             broker__pb2.Message.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def AckMessage(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/broker.MessageBroker/AckMessage',
+            broker__pb2.AckRequest.SerializeToString,
+            broker__pb2.ActionResponse.FromString,
             options,
             channel_credentials,
             insecure,
