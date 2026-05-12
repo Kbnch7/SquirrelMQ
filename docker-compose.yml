@@ -1,0 +1,45 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: cache_demo
+      POSTGRES_USER: cache_user
+      POSTGRES_PASSWORD: cache_password
+    ports:
+      - "15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cache_user -d cache_demo"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "16379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  test:
+    image: python:3.12-slim
+    working_dir: /work
+    volumes:
+      - ./main.py:/work/main.py
+    environment:
+      DB_HOST: db
+      DB_PORT: 5432
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      REQUESTS: ${REQUESTS:-1000}
+      ITEMS: ${ITEMS:-100}
+      FLUSH_EVERY: ${FLUSH_EVERY:-500}
+      PYTHONUNBUFFERED: 1
+    command: sh -c "pip install -q --disable-pip-version-check --root-user-action=ignore psycopg2-binary redis && python main.py"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
