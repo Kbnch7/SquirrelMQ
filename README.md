@@ -1,135 +1,217 @@
-# Разработка брокера сообщений (Protobuf Over TCP)
-## Обзор проекта
-Цель проекта — разработка легковесного брокера сообщений для организации асинхронного взаимодействия между микросервисами. Система реализует классическую модель маршрутизации через точки обмена (Exchanges) и очереди (Queues).
+# SquirrelMQ
 
-## Архитектура системы
-Networking Layer (TCP Server): Принимает входящие соединения, отвечает за хендшейк и чтение байтов из сокета.
+SquirrelMQ - мой учебный брокер сообщений. Я делал его как небольшой аналог RabbitMQ: есть exchange, queue, binding, publisher, consumer, подтверждение доставки и хранение состояния в PostgreSQL.
 
-Protocol Parser (Protobuf): Десериализует байты в типизированные объекты (Frame).
+Проект написан на Python, сетевой протокол сделан через gRPC/Protobuf, для клиента есть простой SDK.
 
-Exchange Router: «Мозги» системы. Принимает сообщение и, согласно таблице маршрутизации (Bindings), определяет, в какие очереди его направить.
+## Что реализовано
 
-Queue Manager: Управляет жизненным циклом очередей в оперативной памяти и порядком выдачи сообщений (FIFO).
+- Публикация и получение сообщений по модели Publisher/Subscriber.
+- Exchange и очереди:
+  - `DIRECT` - сообщение попадает в очередь по точному routing key;
+  - `FANOUT` - сообщение копируется во все привязанные очереди;
+  - `TOPIC` - поддерживаются шаблоны `*` и `#`.
+- Несколько очередей и несколько consumers.
+- FIFO-порядок внутри очереди.
+- Персистентность через PostgreSQL:
+  - сохраняются сообщения;
+  - сохраняются exchanges, queues и bindings;
+  - после перезапуска брокер восстанавливает топологию.
+- Подтверждение доставки через ACK.
+- Сообщения, которые уже подтверждены, повторно не выдаются.
+- Гарантия доставки `at-least-once`.
+- `visibility timeout`: если consumer получил сообщение, но не отправил ACK, сообщение снова станет доступно после таймаута.
+- Dead Letter состояние: после нескольких неудачных доставок сообщение переводится в `dead_letter`.
+- Метрики в формате Prometheus.
+- Python SDK для publisher/consumer.
+- Docker Compose для запуска брокера и базы.
+- Unit-тесты для роутинга и доставки.
+- Демонстрационные стенды для защиты.
 
-Persistence Layer (PostgreSQL): Отвечает за транзакционную запись сообщений и хранение конфигурации (топики, привязки).
+## Общая схема
 
-Delivery Service: Следит за отправкой сообщений активным подписчикам и ожидает подтверждения (ACK).
-
-## Схема архитектуры
 ```mermaid
 graph TB
-subgraph Network_IO [1. Сетевой Слой]
-    TCPServer[TCP/gRPC Сервер]
-    Auth[Аутентификация]
-end
-
-subgraph Core_Engine [2. Ядро Брокера]
-    direction TB
-    ReqParser["Десериализатор (Proto)"]
-    Router{Роутер}
-end
-
-subgraph State_Management [3. Состояние и Хранение]
-    direction LR
-    subgraph Memory_Layer [RAM]
-        InMemQueues[[Очереди в памяти]]
-        ConnDB[[Таблица подключений]]
-    end
-
-    subgraph Persistent_Layer [Disk]
-        WAL[(Postgres)]
-    end
-end
-
-TCPServer --> Auth
-Auth --> ReqParser
-ReqParser --> Router
-Router --> InMemQueues
-InMemQueues --> WAL
-InMemQueues --> ConnDB
-ConnDB --> TCPServer
+    Producer[Producer через SDK] --> GRPC[gRPC API]
+    Consumer[Consumer через SDK] --> GRPC
+    GRPC --> Service[BrokerService]
+    Service --> Router[Exchange Router]
+    Router --> RuntimeQueues[Очереди в памяти]
+    Service --> Postgres[(PostgreSQL)]
+    RuntimeQueues --> Service
+    Service --> Metrics[Метрики]
 ```
 
+PostgreSQL здесь является основным хранилищем. Очереди в памяти нужны не как единственный источник данных, а как быстрый runtime-слой, чтобы будить consumers. Перед выдачей сообщения broker всё равно атомарно помечает его в PostgreSQL как `in_flight`.
 
-## Формат сообщения
-``` proto
-syntax = "proto3";
+## Модель данных
 
-message Message {
-  string id = 1;          
-  string routing_key = 2;
-  bytes payload = 3;      
-  int64 timestamp = 4;  
-  map<string, string> metadata = 5;
-}
-```
-
-## Структура БД
 ```mermaid
 erDiagram
-    MESSAGES {
-        string id PK
-        string exchange_id FK
-        blob payload
-        string routing_key
-        string status
-        string idempotency_key
-        string metadata
-        int64 timestamp
-    }
-    QUEUES {
-        string id PK
-        string name
-        boolean is_durable
-    }
+    EXCHANGES ||--o{ BINDINGS : has
+    QUEUES ||--o{ BINDINGS : has
+    MESSAGES ||--o{ QUEUE_MESSAGES : routed
+    QUEUES ||--o{ QUEUE_MESSAGES : stores
+
     EXCHANGES {
-        string id PK
-        string name
+        string name PK
         string type
     }
-    BINDINGS {
-        string exchange_id FK
-        string queue_id FK
-        string routing_key
+    QUEUES {
+        string name PK
+        float created_at
     }
-
-    EXCHANGES ||--o{ BINDINGS : "routes_to"
-    QUEUES ||--o{ BINDINGS : "bound_via"
-    EXCHANGES ||--o{ MESSAGES : "manages"
+    BINDINGS {
+        string exchange_name PK
+        string queue_name PK
+        string binding_key PK
+    }
+    MESSAGES {
+        string id PK
+        string routing_key
+        string payload
+        float timestamp
+    }
+    QUEUE_MESSAGES {
+        string queue_name PK
+        string message_id PK
+        string status
+        int attempts
+        float locked_until
+        float delivered_at
+    }
 ```
 
-## Технический стек
-| Технология | Выбор | Обоснование |
-| ---------- | ------| ------------|
-| Язык | Python 3.12 | Высокая скорость разработки логики брокера и отличная поддержка asyncio.|
-| Сетевой слой | Asyncio Streams | Позволяет эффективно обрабатывать тысячи конкурентных TCP-соединений на одном ядре. |
-| Протокол | Protobuf | Бинарный формат быстрее и компактнее JSON. Легко генерировать SDK для разных ЯП. |
-| База данных | PostgreSQL | Поддержка транзакций (ACID) критична для гарантии доставки. Инструменты типа SKIP LOCKED упрощают работу с очередями. |
+## Статусы доставки
 
-## План разработки
+Основной жизненный цикл сообщения в очереди:
 
-### Протокол и Транспорт:
+```text
+pending -> in_flight -> delivered
+```
 
-- Описание всех .proto фреймов (Connect, Publish, Subscribe, Ack).
+Что это значит:
 
-- Создание базового TCP-сервера, который "эхом" отвечает на Protobuf-сообщения.
+- `pending` - сообщение лежит в очереди и ждёт consumer;
+- `in_flight` - сообщение уже выдано consumer, broker ждёт ACK;
+- `delivered` - consumer подтвердил сообщение, повторно оно не выдаётся;
+- `dead_letter` - сообщение слишком много раз не было подтверждено.
 
-### Маршрутизация и Память:
+Я не заявляю `exactly-once`, потому что в таком брокере это нельзя честно гарантировать без транзакционной связки между обработкой на стороне consumer и ACK. Реализован нормальный для брокеров вариант `at-least-once`.
 
-- Реализация Exchange и Queue в оперативной памяти.
+## Запуск
 
-- Логика распределения сообщений между подписчиками (Round Robin).
+В корне проекта нужен `.env`:
 
-### Персистентность:
+```env
+DATABASE_URL=postgres://squirrel:squirrel_pass@postgres:5432/squirrelmq
+POSTGRES_USER=squirrel
+POSTGRES_PASSWORD=squirrel_pass
+POSTGRES_DB=squirrelmq
+```
 
-- Интеграция Postgres.
+Запуск брокера и PostgreSQL:
 
-- Реализация записи сообщения в БД перед отправкой ACK паблишеру.
+```bash
+docker compose up --build
+```
 
-- Механизм восстановления очереди из БД при старте сервера.
+После запуска:
 
-### Клиентское SDK и Тесты:
+- gRPC broker доступен на `localhost:50051`;
+- метрики доступны на `http://localhost:8001/metrics`;
+- PostgreSQL проброшен наружу на `localhost:5433`.
 
-- Написание Python-библиотеки для удобной работы с брокером.
+Проверка метрик:
 
-- Создание Docker-compose окружения с тремя тестовыми сервисами.
+```bash
+curl http://localhost:8001/metrics
+```
+
+## Демонстрационные стенды
+
+Я подготовил отдельные стенды, чтобы на защите можно было показать поведение без ручной настройки очередей.
+
+### Стенд 1: Pub/Sub и FANOUT
+
+Показывает, что одно опубликованное событие попадает в несколько очередей.
+
+```bash
+venv/bin/python demo_stands/stand_1_pubsub.py
+```
+
+Что должно быть видно:
+
+- создаётся отдельный exchange;
+- создаются две очереди;
+- публикуются 3 сообщения;
+- обе очереди получают одинаковый набор сообщений.
+
+### Стенд 2: ACK и отсутствие дублей
+
+Показывает главный фикс: прочитанное и подтверждённое сообщение больше не появляется.
+
+```bash
+venv/bin/python demo_stands/stand_2_ack_no_duplicates.py
+```
+
+Ожидаемый вывод в конце:
+
+```text
+OK: after ACK message was not delivered again
+```
+
+### Стенд 3: повторная доставка без ACK
+
+Показывает `at-least-once`: если consumer получил сообщение, но не подтвердил его, broker выдаст это же сообщение повторно после `visibility timeout`.
+
+```bash
+venv/bin/python demo_stands/stand_3_redelivery_without_ack.py
+```
+
+Ожидаемый смысл вывода:
+
+- сообщение получено первый раз без ACK;
+- скрипт ждёт timeout;
+- то же сообщение приходит снова;
+- после ACK оно больше не висит в очереди.
+
+## Пример SDK
+
+```python
+import asyncio
+from sdk import ExchangeType, SquirrelClient
+
+
+async def main():
+    client = SquirrelClient()
+    await client.connect()
+
+    await client.declare_exchange("events", ExchangeType.FANOUT)
+    await client.declare_queue("audit")
+    await client.bind_queue("audit", "events", "user.created")
+
+    message_id = await client.publish("events", "user.created", "user-1")
+    print(message_id)
+
+    await client.close()
+
+
+asyncio.run(main())
+```
+
+## Тесты
+
+Запуск unit-тестов:
+
+```bash
+cd message_broker
+../venv/bin/python -m unittest discover -s tests
+```
+
+Проверяется:
+
+- роутинг `FANOUT`;
+- роутинг `TOPIC`;
+- что ACK убирает сообщение из дальнейшей выдачи;
+- что NACK/неподтверждённое сообщение можно вернуть в доставку.
